@@ -1,0 +1,188 @@
+version: '3'
+services:
+  zookeeper:
+    image: wurstmeister/zookeeper
+    ports:
+      - 2181:2181
+    networks:
+      - shopiny-backend
+
+  kafka:
+    image: wurstmeister/kafka
+    ports:
+      - 9092:9092
+      - 29092:29092
+    links:
+      - zookeeper
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_PORT: 9092
+      KAFKA_LISTENERS:
+        INTERNAL://:9092,
+        EXTERNAL://:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP:
+        INTERNAL:PLAINTEXT,
+        EXTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_HOST_NAME: kafka
+      KAFKA_ADVERTISED_LISTENERS:
+        INTERNAL://kafka:9092,
+        EXTERNAL://localhost:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    networks:
+      - shopiny-backend
+
+  kafkacat:
+    image: confluentinc/cp-kafkacat
+    command: sleep infinity
+    networks:
+      - shopiny-backend
+
+  kafka-rest:
+    image: nodefluent/kafka-rest
+    ports:
+      - 8083:8083
+    links:
+      - kafka
+      - zookeeper
+    depends_on:
+      - kafka
+      - zookeeper
+    environment:
+#      DEBUG: "*"
+      KAFKA_REST_DEBUG: "all"
+      KAFKA_REST_HTTP_PORT: 8083
+      KAFKA_REST_CONSUMER_METADATA_BROKER_LIST: "kafka:9092"
+      KAFKA_REST_PRODUCER_METADATA_BROKER_LIST: "kafka:9092"
+    networks:
+      - shopiny-backend
+
+  kafka-rest-ui:
+    image: nodefluent/kafka-rest-ui
+    ports:
+      - 8000:8000
+    links:
+      - kafka-rest
+    depends_on:
+      - kafka-rest
+    environment:
+#      DEBUG: "*"
+      REACT_APP_KAFKA_REST_URL: "http://kafka-rest:8083/"
+      REACT_APP_TIMEOUT: "3000"
+      PROXY: "yes"
+      BASIC_AUTH_USER: "admin"
+      BASIC_AUTH_PASSWORD: "admin"
+    networks:
+      - shopiny-backend
+  mysql:
+    build:
+      context: mysql
+      args:
+        EVENTUATE_COMMON_VERSION: 0.15.0.RELEASE
+        EVENTUATE_SAGA_VERSION: 0.20.0.RELEASE
+    container_name: shopiny_mysql
+    ports:
+      - 3306:3306
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpassword
+      - MYSQL_USER=mysqluser
+      - MYSQL_PASSWORD=mysqlpw
+    networks:
+      - shopiny-backend
+  zipkin:
+    image: openzipkin/zipkin:2.21
+    container_name: shopiny_zipkin
+    ports:
+      - "9411:9411"
+    environment:
+      JAVA_OPTS: -Xmx128m
+    networks:
+      - shopiny-backend
+  shopiny-order-service:
+    container_name: shopiny_order_service
+    build:
+      context: ./order-service
+      args:
+        baseImageVersion: BUILD-15
+    ports:
+      - "8082:8080"
+      - "5002:5002"
+    depends_on:
+      - mysql
+      - kafka
+      - zipkin
+      - eureka-server
+    environment:
+      JAVA_OPTS: -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5002
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql/shopiny_order_service
+      SPRING_DATASOURCE_USERNAME: shopiny_order_service_user
+      SPRING_DATASOURCE_PASSWORD: shopiny_order_service_password
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.jdbc.Driver
+      EVENTUATELOCAL_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      EVENTUATELOCAL_ZOOKEEPER_CONNECTION_STRING: zookeeper:2181
+      SPRING_SLEUTH_ENABLED: "true"
+      SPRING_SLEUTH_SAMPLER_PROBABILITY: 1
+      SPRING_ZIPKIN_BASE_URL: http://zipkin:9411/
+      EVENTUATE_DATABASE_SCHEMA: shopiny_order_service
+    networks:
+      - shopiny-backend
+  shopiny-payment-service:
+    container_name: shopiny_payment_service
+    build:
+      context: ./payment-service
+      args:
+        baseImageVersion: BUILD-15
+    ports:
+      - "8090:8080"
+      - "5003:5002"
+    depends_on:
+      - mysql
+      - kafka
+      - zipkin
+      - eureka-server
+    environment:
+      JAVA_OPTS: -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5002
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql/shopiny_order_service
+      SPRING_DATASOURCE_USERNAME: shopiny_order_service_user
+      SPRING_DATASOURCE_PASSWORD: shopiny_order_service_password
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.jdbc.Driver
+      EVENTUATELOCAL_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      EVENTUATELOCAL_ZOOKEEPER_CONNECTION_STRING: zookeeper:2181
+      SPRING_SLEUTH_ENABLED: "true"
+      SPRING_SLEUTH_SAMPLER_PROBABILITY: 1
+      SPRING_ZIPKIN_BASE_URL: http://zipkin:9411/
+      EVENTUATE_DATABASE_SCHEMA: shopiny_order_service
+    networks:
+      - shopiny-backend
+  eureka-server:
+    container_name: eureka-server
+    build:
+      context: ./eureka-server
+      args:
+        baseImageVersion: BUILD-15
+    ports:
+      - "8761:8761"
+      - "5004:5002"
+    depends_on:
+      - mysql
+      - kafka
+      - zipkin
+    environment:
+      JAVA_OPTS: -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5002
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql/shopiny_order_service
+      SPRING_DATASOURCE_USERNAME: shopiny_order_service_user
+      SPRING_DATASOURCE_PASSWORD: shopiny_order_service_password
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.jdbc.Driver
+      EVENTUATELOCAL_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      EVENTUATELOCAL_ZOOKEEPER_CONNECTION_STRING: zookeeper:2181
+      SPRING_SLEUTH_ENABLED: "true"
+      SPRING_SLEUTH_SAMPLER_PROBABILITY: 1
+      SPRING_ZIPKIN_BASE_URL: http://zipkin:9411/
+      EVENTUATE_DATABASE_SCHEMA: shopiny_order_service
+    networks:
+      - shopiny-backend
+networks:
+  shopiny-backend:
